@@ -164,6 +164,56 @@ type HomeData = {
   fetchedAt: string;
 };
 
+type VideoAnalysisData = {
+  video: {
+    id: string;
+    title: string;
+    description: string;
+    thumbnail?: string;
+    publishedAt: string;
+    duration: string;
+    durationSeconds: number;
+    views: number;
+    likes: number;
+    comments: number;
+    channelId: string;
+    channelTitle: string;
+    categoryId: string;
+    definition: string;
+    captionsAvailable: boolean;
+    ageHours: number;
+    viewsPerHour: number;
+    viewsPerDay: number;
+    engagementRate: number;
+    likesPerThousandViews: number;
+    commentsPerThousandViews: number;
+    tagsCount: number;
+    titleLength: number;
+    descriptionLength: number;
+  };
+  channel: Channel | null;
+  benchmark: {
+    sampleSize: number;
+    averageViews: number;
+    medianViews: number;
+    rank: number;
+    totalCompared: number;
+    percentile: number;
+    performanceMultiple: number;
+    aboveBenchmarkPercent: number;
+    recentVideos: Array<{
+      id: string;
+      title: string;
+      thumbnail?: string;
+      publishedAt: string;
+      views: number;
+      likes: number;
+      comments: number;
+    }>;
+  };
+  fetchedAt: string;
+};
+
 const MAX_SHORT_DURATION = 60;
 const MAX_VIDEO_HISTORY_SNAPSHOTS = 20;
 const MAX_TRACKED_VIDEOS = 1000;
@@ -419,6 +469,14 @@ function formatRelativeTime(date: string) {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function formatVideoAge(hours: number) {
+  if (!Number.isFinite(hours) || hours <= 0) return "0h";
+  if (hours < 24) return `${hours.toFixed(1)}h`;
+  const days = hours / 24;
+  if (days < 30) return `${days.toFixed(1)}d`;
+  return `${Math.floor(days / 30)}mo`;
+}
+
 function getInsights(videos: Video[], analytics: Analytics): Insight[] {
   if (!videos.length) return [];
   const insights: Insight[] = [];
@@ -476,6 +534,7 @@ function getHomeChannelViews(channel: HomeChannel) {
 type IconName =
   | "home"
   | "dashboard"
+  | "video"
   | "channels"
   | "compare"
   | "settings";
@@ -501,6 +560,13 @@ function AppIcon({
         <rect x="10" y="3" width="5" height="5" rx="1" />
         <rect x="3" y="10" width="5" height="5" rx="1" />
         <rect x="10" y="10" width="5" height="5" rx="1" />
+      </>
+    ),
+    video: (
+      <>
+        <rect x="2.5" y="4" width="11" height="10" rx="2" />
+        <path d="m14 7 2.5-1.5v7L14 11" />
+        <path d="m7.5 7.2 3.2 1.8-3.2 1.8Z" />
       </>
     ),
     channels: (
@@ -878,7 +944,7 @@ export default function Home() {
   const [videoHistory, setVideoHistory] = useState<VideoHistory>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [activePage, setActivePage] = useState<"home" | "dashboard" | "channels" | "compare" | "settings">("home");
+  const [activePage, setActivePage] = useState<"home" | "dashboard" | "video" | "channels" | "compare" | "settings">("home");
   const [storageLoaded, setStorageLoaded] = useState(false);
   const [videoFilter, setVideoFilter] = useState<VideoFilter>("all");
   const [compareSelected, setCompareSelected] = useState<string[]>([]);
@@ -890,6 +956,10 @@ export default function Home() {
   const [homeLoading, setHomeLoading] = useState(false);
   const [homeError, setHomeError] = useState("");
   const [homeRegion, setHomeRegion] = useState("PH");
+  const [videoInput, setVideoInput] = useState("");
+  const [videoAnalysis, setVideoAnalysis] = useState<VideoAnalysisData | null>(null);
+  const [videoLoading, setVideoLoading] = useState(false);
+  const [videoError, setVideoError] = useState("");
 
   useEffect(() => {
     try {
@@ -941,6 +1011,34 @@ export default function Home() {
     fetchHomeData("PH");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function analyzeVideo(input: string) {
+    const trimmed = input.trim();
+
+    if (!trimmed) {
+      setVideoError("Paste a YouTube video URL or video ID.");
+      return;
+    }
+
+    setVideoLoading(true);
+    setVideoError("");
+
+    try {
+      const response = await fetch(`/api/video?url=${encodeURIComponent(trimmed)}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to analyze video.");
+      }
+
+      setVideoAnalysis(data);
+    } catch (err) {
+      setVideoError(err instanceof Error ? err.message : "Failed to analyze video.");
+      setVideoAnalysis(null);
+    } finally {
+      setVideoLoading(false);
+    }
+  }
 
   async function analyzeChannel(inputUrl: string) {
     const trimmedUrl = inputUrl.trim();
@@ -1382,6 +1480,7 @@ export default function Home() {
           <nav className="space-y-1 px-3 py-4">
             <NavItem label="Home" icon="home" active={activePage === "home"} onClick={() => setActivePage("home")} />
             <NavItem label="Dashboard" icon="dashboard" active={activePage === "dashboard"} onClick={() => setActivePage("dashboard")} />
+            <NavItem label="Video Analyzer" icon="video" active={activePage === "video"} onClick={() => setActivePage("video")} />
             <NavItem label="Channels" icon="channels" active={activePage === "channels"} onClick={() => setActivePage("channels")} />
             <NavItem label="Compare" icon="compare" active={activePage === "compare"} onClick={() => setActivePage("compare")} />
             <NavItem label="Settings" icon="settings" active={activePage === "settings"} onClick={() => setActivePage("settings")} />
@@ -1427,6 +1526,7 @@ export default function Home() {
           {([
             ["Home", "home"],
             ["Dashboard", "dashboard"],
+            ["Video", "video"],
             ["Channels", "channels"],
             ["Compare", "compare"],
             ["Settings", "settings"],
@@ -1456,7 +1556,7 @@ export default function Home() {
                 <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-white/25">{activePage === "home" ? "youtube intelligence" : activePage}</p>
               </div>
               <h1 className="mt-1 text-2xl font-semibold tracking-[-0.03em] text-white sm:text-[28px]">
-                {activePage === "home" ? "YouTube Intelligence" : activePage === "dashboard" ? "Channel dashboard" : activePage === "channels" ? "Saved channels" : activePage === "compare" ? "Compare channels" : "Settings"}
+                {activePage === "home" ? "YouTube Intelligence" : activePage === "dashboard" ? "Channel dashboard" : activePage === "video" ? "Video Analyzer" : activePage === "channels" ? "Saved channels" : activePage === "compare" ? "Compare channels" : "Settings"}
               </h1>
             </div>
             {activePage === "dashboard" && <div className="flex w-full max-w-xl gap-2">
@@ -1679,6 +1779,187 @@ export default function Home() {
             <div className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3"><p className="text-xs leading-5 text-white/30">Public YouTube intelligence is based on data available through the YouTube Data API. The Home page combines the regional popular-video chart with application-derived signals such as repeated title terms and views-per-hour estimates.</p></div>
           </div>}
 
+          {activePage === "video" && <div className="space-y-6">
+            <div className="premium-card shine-slow relative overflow-hidden rounded-[28px] p-6 sm:p-8">
+              <div className="hero-glow -right-16 -top-20 h-56 w-56 bg-red-500/15" />
+              <div className="hero-glow -bottom-24 left-1/3 h-52 w-52 bg-red-500/8" />
+
+              <div className="relative z-10 grid gap-8 xl:grid-cols-[1.25fr_.8fr] xl:items-end">
+                <div>
+                  <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-red-400/20 bg-red-500/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-red-300">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400 shadow-[0_0_14px_rgba(248,113,113,.9)]" />
+                    Public video intelligence
+                  </div>
+                  <h2 className="max-w-3xl text-4xl font-semibold tracking-[-0.04em] text-white sm:text-5xl">
+                    Analyze one video in detail.
+                  </h2>
+                  <p className="mt-4 max-w-2xl text-sm leading-7 text-white/45">
+                    Get the public performance metrics YouTube exposes, plus a benchmark against the channel&apos;s recent uploads.
+                  </p>
+                </div>
+
+                <div className="glass-card rounded-2xl border border-white/10 bg-black/20 p-4 backdrop-blur-xl">
+                  <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.18em] text-white/25">Analyze a video</p>
+                  <div className="flex gap-2">
+                    <input
+                      value={videoInput}
+                      onChange={(event) => setVideoInput(event.target.value)}
+                      onKeyDown={(event) => { if (event.key === "Enter") analyzeVideo(videoInput); }}
+                      placeholder="Paste a YouTube video URL or ID"
+                      className="min-w-0 flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white outline-none transition-all duration-300 placeholder:text-white/20 focus:border-red-400/30 focus:bg-white/[0.06]"
+                    />
+                    <button
+                      onClick={() => analyzeVideo(videoInput)}
+                      disabled={videoLoading}
+                      className="button-sheen shrink-0 rounded-xl bg-white px-4 py-3 text-xs font-semibold text-black transition-all duration-300 hover:-translate-y-px hover:bg-white/90 disabled:opacity-50"
+                    >
+                      {videoLoading ? "Analyzing..." : "Analyze"}
+                    </button>
+                  </div>
+                  <p className="mt-2 text-[10px] text-white/20">Public data only. No Google sign-in required.</p>
+                </div>
+              </div>
+            </div>
+
+            {videoError && <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">{videoError}</div>}
+
+            {!videoAnalysis && !videoLoading && !videoError && (
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                {[
+                  ["Performance", "Views, likes, comments and engagement"],
+                  ["Velocity", "Views per hour and views per day"],
+                  ["Benchmark", "Compare with recent channel uploads"],
+                  ["Metadata", "Duration, category, captions and title info"],
+                ].map(([title, description]) => (
+                  <div key={title} className="glass-card group rounded-2xl border border-white/10 bg-white/[0.03] p-5 transition-all duration-300 hover:-translate-y-1 hover:border-red-400/20 hover:bg-white/[0.045]">
+                    <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-red-500/10 text-red-300 transition-transform duration-300 group-hover:scale-110">
+                      <AppIcon name="video" size={16} />
+                    </div>
+                    <p className="text-sm font-medium text-white">{title}</p>
+                    <p className="mt-2 text-xs leading-5 text-white/30">{description}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {videoLoading && (
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <div key={index} className="animate-pulse rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                    <div className="h-3 w-24 rounded bg-white/5" />
+                    <div className="mt-4 h-8 w-28 rounded bg-white/5" />
+                    <div className="mt-3 h-2 w-full rounded bg-white/5" />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {videoAnalysis && (
+              <>
+                <div className="glass-card overflow-hidden rounded-3xl border border-white/10 bg-white/[0.03]">
+                  <div className="grid xl:grid-cols-[1.25fr_.75fr]">
+                    <div className="relative min-h-[300px] overflow-hidden border-b border-white/10 xl:border-b-0 xl:border-r">
+                      {videoAnalysis.video.thumbnail && <img src={videoAnalysis.video.thumbnail} alt="" className="absolute inset-0 h-full w-full object-cover opacity-45" />}
+                      <div className="absolute inset-0 bg-gradient-to-br from-black/35 via-black/70 to-[#0b0b0b]" />
+                      <div className="relative flex min-h-[300px] flex-col justify-end p-6 sm:p-8">
+                        <div className="mb-4 flex flex-wrap items-center gap-2">
+                          <span className="rounded-full border border-red-400/20 bg-red-500/10 px-3 py-1 text-[10px] font-medium text-red-300">{videoAnalysis.video.channelTitle}</span>
+                          <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[10px] text-white/45">{formatDuration(videoAnalysis.video.durationSeconds)}</span>
+                          <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[10px] text-white/45">{formatVideoAge(videoAnalysis.video.ageHours)} old</span>
+                        </div>
+                        <h2 className="max-w-4xl text-2xl font-semibold tracking-[-0.03em] text-white sm:text-3xl">{videoAnalysis.video.title}</h2>
+                        <p className="mt-3 text-xs text-white/35">Published {formatDate(videoAnalysis.video.publishedAt)}</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-px bg-white/5">
+                      {[
+                        ["Views", formatCompact(videoAnalysis.video.views)],
+                        ["Likes", formatCompact(videoAnalysis.video.likes)],
+                        ["Comments", formatCompact(videoAnalysis.video.comments)],
+                        ["Engagement", `${videoAnalysis.video.engagementRate.toFixed(2)}%`],
+                      ].map(([label, value]) => (
+                        <div key={label} className="bg-[#0d0e11] p-5 sm:p-6">
+                          <p className="text-[10px] uppercase tracking-[0.16em] text-white/25">{label}</p>
+                          <p className="mt-3 text-2xl font-semibold tracking-tight text-white">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <StatCard label="Views / hour" value={formatCompact(videoAnalysis.video.viewsPerHour)} description="Current rate based on video age" />
+                  <StatCard label="Views / day" value={formatCompact(videoAnalysis.video.viewsPerDay)} description="Current daily rate estimate" />
+                  <StatCard label="Likes / 1K views" value={videoAnalysis.video.likesPerThousandViews.toFixed(2)} description="Public engagement density" />
+                  <StatCard label="Comments / 1K" value={videoAnalysis.video.commentsPerThousandViews.toFixed(2)} description="Public comment density" />
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-[1.1fr_.9fr]">
+                  <div className="chart-card glass-card rounded-2xl border border-white/10 bg-white/[0.035] p-5">
+                    <SectionTitle title="Channel benchmark" description={`Compared with ${videoAnalysis.benchmark.sampleSize} recent uploads from the same channel.`} />
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <MetricCard label="Position" value={`${videoAnalysis.benchmark.rank} / ${videoAnalysis.benchmark.totalCompared}`} description="By current views" />
+                      <MetricCard label="Vs average" value={`${videoAnalysis.benchmark.performanceMultiple.toFixed(2)}×`} description={`${videoAnalysis.benchmark.aboveBenchmarkPercent >= 0 ? "+" : ""}${videoAnalysis.benchmark.aboveBenchmarkPercent.toFixed(0)}% vs recent average`} />
+                      <MetricCard label="Percentile" value={`${videoAnalysis.benchmark.percentile.toFixed(0)}th`} description="Within compared uploads" />
+                    </div>
+
+                    <div className="mt-5 h-[280px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={[
+                          { name: "This video", views: videoAnalysis.video.views },
+                          { name: "Recent avg", views: videoAnalysis.benchmark.averageViews },
+                          { name: "Recent median", views: videoAnalysis.benchmark.medianViews },
+                        ]}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                          <XAxis dataKey="name" tick={{ fill: "rgba(255,255,255,0.45)", fontSize: 10 }} axisLine={false} tickLine={false} />
+                          <YAxis tickFormatter={formatCompact} tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 10 }} axisLine={false} tickLine={false} />
+                          <Tooltip content={<ChartTooltip />} />
+                          <Bar dataKey="views" name="Views" fill={CHART_RED} radius={[6, 6, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="glass-card rounded-2xl border border-white/10 bg-white/[0.035] p-5">
+                    <SectionTitle title="Video details" description="Public metadata returned by YouTube." />
+                    <MetricLine label="Category ID" value={videoAnalysis.video.categoryId || "N/A"} />
+                    <MetricLine label="Quality" value={videoAnalysis.video.definition.toUpperCase()} />
+                    <MetricLine label="Captions" value={videoAnalysis.video.captionsAvailable ? "Available" : "Not available"} />
+                    <MetricLine label="Title length" value={`${videoAnalysis.video.titleLength} characters`} />
+                    <MetricLine label="Description length" value={`${videoAnalysis.video.descriptionLength} characters`} />
+                    <MetricLine label="Tags" value={formatNumber(videoAnalysis.video.tagsCount)} />
+                    <MetricLine label="Video age" value={formatVideoAge(videoAnalysis.video.ageHours)} />
+                  </div>
+                </div>
+
+                {videoAnalysis.benchmark.recentVideos.length > 0 && (
+                  <div className="glass-card rounded-2xl border border-white/10 bg-white/[0.035] p-5">
+                    <SectionTitle title="Recent channel uploads" description="The benchmark sample used to contextualize this video's performance." />
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {videoAnalysis.benchmark.recentVideos.map((recentVideo) => (
+                        <div key={recentVideo.id} className="group flex gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-3 transition-all duration-300 hover:-translate-y-px hover:border-white/10 hover:bg-white/[0.04]">
+                          {recentVideo.thumbnail ? <img src={recentVideo.thumbnail} alt="" className="h-14 w-24 shrink-0 rounded-xl object-cover transition-transform duration-500 group-hover:scale-105" /> : <div className="h-14 w-24 shrink-0 rounded-xl bg-white/5" />}
+                          <div className="min-w-0 flex-1">
+                            <p className="line-clamp-2 text-xs font-medium leading-5 text-white">{recentVideo.title}</p>
+                            <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-white/30">
+                              <span>{formatRelativeTime(recentVideo.publishedAt)}</span>
+                              <span className="font-medium text-white/55">{formatCompact(recentVideo.views)} views</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3">
+                  <p className="text-xs leading-5 text-white/30">Public video analysis uses data returned by the YouTube Data API. Current view, like, and comment counts can change over time.</p>
+                </div>
+              </>
+            )}
+          </div>}
+
           {activePage === "dashboard" && <>
             {!channel ? <EmptyPage title="Analyze a YouTube channel" description="Paste a channel URL or handle above to see video performance, upload behavior, engagement, content mix, and historical growth." /> : <>
               <div className="mb-6 glass-card rounded-2xl border border-white/10 bg-white/[0.03] p-5"><div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between"><div className="flex min-w-0 items-center gap-4">{channel.thumbnail ? <img src={channel.thumbnail} alt="" className="h-16 w-16 rounded-full object-cover" /> : <div className="h-16 w-16 rounded-full bg-white/10" />}<div className="min-w-0"><h2 className="truncate text-xl font-semibold">{channel.title}</h2><p className="mt-1 text-xs text-white/30">{formatCompact(channel.subscribers)} subscribers · {formatCompact(channel.views)} total views · {formatNumber(channel.videos)} videos</p></div></div><button onClick={saveCurrentChannel} disabled={isChannelSaved()} className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs text-white/70 transition hover:bg-white/10 disabled:opacity-40">{isChannelSaved() ? "Saved" : "Save Channel"}</button></div></div>
@@ -1723,7 +2004,7 @@ export default function Home() {
             </>}
           </div>}
 
-          {activePage === "settings" && <div className="grid gap-4 xl:grid-cols-2"><div className="glass-card rounded-2xl border border-white/10 bg-white/[0.03] p-5"><SectionTitle title="API configuration" description="YouTube Data API configuration for this application." /><MetricLine label="Provider" value="YouTube Data API v3" /><MetricLine label="API key" value="Configured server-side" /><MetricLine label="Video fetch limit" value="Up to 500 videos" /></div><div className="glass-card rounded-2xl border border-white/10 bg-white/[0.03] p-5"><SectionTitle title="Local storage" description="Your saved channels and historical snapshots are stored in this browser." /><MetricLine label="Saved channels" value={formatNumber(savedChannels.length)} /><MetricLine label="Channels with history" value={formatNumber(Object.keys(history).length)} /><MetricLine label="Tracked videos" value={formatNumber(Object.keys(videoHistory).length)} /><MetricLine label="Snapshots / video" value={`${MAX_VIDEO_HISTORY_SNAPSHOTS} maximum`} /><MetricLine label="Maximum tracked videos" value={formatNumber(MAX_TRACKED_VIDEOS)} /></div><div className="glass-card rounded-2xl border border-white/10 bg-white/[0.03] p-5 xl:col-span-2"><SectionTitle title="Analysis coverage" description="Current limits of the dashboard." /><MetricLine label="Videos fetched per analysis" value="Up to 500" /><MetricLine label="Shorts classification" value="60 seconds or less" /><MetricLine label="Channel historical snapshots" value="100 per channel" /><MetricLine label="Video historical snapshots" value={`${MAX_VIDEO_HISTORY_SNAPSHOTS} per video`} /><MetricLine label="Video momentum" value="Requires at least 2 analyses" /><MetricLine label="Home region" value={homeRegion} /><MetricLine label="Home intelligence" value="Public YouTube data" /></div></div>}
+          {activePage === "settings" && <div className="grid gap-4 xl:grid-cols-2"><div className="glass-card rounded-2xl border border-white/10 bg-white/[0.03] p-5"><SectionTitle title="API configuration" description="YouTube Data API configuration for this application." /><MetricLine label="Provider" value="YouTube Data API v3" /><MetricLine label="API key" value="Configured server-side" /><MetricLine label="Video fetch limit" value="Up to 500 videos" /></div><div className="glass-card rounded-2xl border border-white/10 bg-white/[0.03] p-5"><SectionTitle title="Local storage" description="Your saved channels and historical snapshots are stored in this browser." /><MetricLine label="Saved channels" value={formatNumber(savedChannels.length)} /><MetricLine label="Channels with history" value={formatNumber(Object.keys(history).length)} /><MetricLine label="Tracked videos" value={formatNumber(Object.keys(videoHistory).length)} /><MetricLine label="Snapshots / video" value={`${MAX_VIDEO_HISTORY_SNAPSHOTS} maximum`} /><MetricLine label="Maximum tracked videos" value={formatNumber(MAX_TRACKED_VIDEOS)} /></div><div className="glass-card rounded-2xl border border-white/10 bg-white/[0.03] p-5 xl:col-span-2"><SectionTitle title="Analysis coverage" description="Current limits of the dashboard." /><MetricLine label="Videos fetched per analysis" value="Up to 500" /><MetricLine label="Shorts classification" value="60 seconds or less" /><MetricLine label="Channel historical snapshots" value="100 per channel" /><MetricLine label="Video historical snapshots" value={`${MAX_VIDEO_HISTORY_SNAPSHOTS} per video`} /><MetricLine label="Video momentum" value="Requires at least 2 analyses" /><MetricLine label="Home region" value={homeRegion} /><MetricLine label="Home intelligence" value="Public YouTube data" /><MetricLine label="Video analyzer" value="Public video analytics" /></div></div>}
           <footer className="mt-8 border-t border-white/8 pt-5 text-center lg:text-left">
             <p className="text-[10px] uppercase tracking-[0.18em] text-white/15">YouTube Analyzer</p>
             <p className="mt-1 text-[11px] text-white/30">Developed by <span className="font-medium text-white/55">Clart Kent Nailgas</span></p>
