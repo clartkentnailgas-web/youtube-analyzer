@@ -535,6 +535,7 @@ type IconName =
   | "home"
   | "dashboard"
   | "video"
+  | "insights"
   | "channels"
   | "compare"
   | "settings";
@@ -567,6 +568,13 @@ function AppIcon({
         <rect x="2.5" y="4" width="11" height="10" rx="2" />
         <path d="m14 7 2.5-1.5v7L14 11" />
         <path d="m7.5 7.2 3.2 1.8-3.2 1.8Z" />
+      </>
+    ),
+    insights: (
+      <>
+        <path d="M3 14.5 7 10l3 2.5 5-6" />
+        <path d="M13 6.5h2v2" />
+        <path d="M3 16h13" />
       </>
     ),
     channels: (
@@ -944,7 +952,7 @@ export default function Home() {
   const [videoHistory, setVideoHistory] = useState<VideoHistory>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [activePage, setActivePage] = useState<"home" | "dashboard" | "video" | "channels" | "compare" | "settings">("home");
+  const [activePage, setActivePage] = useState<"home" | "dashboard" | "video" | "insights" | "channels" | "compare" | "settings">("home");
   const [storageLoaded, setStorageLoaded] = useState(false);
   const [videoFilter, setVideoFilter] = useState<VideoFilter>("all");
   const [compareSelected, setCompareSelected] = useState<string[]>([]);
@@ -1163,6 +1171,141 @@ export default function Home() {
     { name: "Likes", value: filteredVideos.reduce((sum, video) => sum + video.likes, 0) },
     { name: "Comments", value: filteredVideos.reduce((sum, video) => sum + video.comments, 0) },
   ], [filteredVideos]);
+
+  const contentCategoryData = useMemo(() => {
+    if (!filteredVideos.length) return [];
+
+    const groups = new Map<string, Video[]>();
+
+    for (const video of filteredVideos) {
+      const key = video.categoryName || "Uncategorized";
+      const existing = groups.get(key) || [];
+      existing.push(video);
+      groups.set(key, existing);
+    }
+
+    return Array.from(groups.entries())
+      .map(([name, group]) => {
+        const stats = calculateAnalytics(group);
+        return {
+          name,
+          videos: group.length,
+          averageViews: stats.averageViews,
+          medianViews: stats.medianViews,
+          engagement: stats.engagementRate,
+        };
+      })
+      .sort((a, b) => b.medianViews - a.medianViews);
+  }, [filteredVideos]);
+
+  const strongestCategory = contentCategoryData[0] || null;
+
+  const performanceMatrixData = useMemo(() => {
+    if (!filteredVideos.length) return [];
+
+    const maxViews = Math.max(...filteredVideos.map((video) => video.views), 1);
+    const maxEngagement = Math.max(
+      ...filteredVideos.map((video) =>
+        video.views > 0
+          ? ((video.likes + video.comments) / video.views) * 100
+          : 0
+      ),
+      0.01
+    );
+
+    return filteredVideos.slice(0, 100).map((video) => {
+      const engagement =
+        video.views > 0
+          ? ((video.likes + video.comments) / video.views) * 100
+          : 0;
+
+      return {
+        id: video.id,
+        title: video.title,
+        x: Math.max(4, Math.min(96, (engagement / maxEngagement) * 92 + 4)),
+        y: Math.max(6, Math.min(94, 96 - (video.views / maxViews) * 88)),
+        views: video.views,
+        engagement,
+      };
+    });
+  }, [filteredVideos]);
+
+  const performanceOutliers = useMemo(() => {
+    const baseline = Math.max(allAnalytics.medianViews, 1);
+
+    return [...filteredVideos]
+      .map((video) => ({
+        ...video,
+        multiple: video.views / baseline,
+      }))
+      .sort((a, b) => b.multiple - a.multiple)
+      .slice(0, 6);
+  }, [filteredVideos, allAnalytics.medianViews]);
+
+  const insightCards = useMemo(() => {
+    const cards: Insight[] = [...insights];
+
+    if (strongestCategory) {
+      cards.push({
+        title: "Strongest content area",
+        description: `${strongestCategory.name} has the highest median views in the current analyzed dataset at ${formatCompact(strongestCategory.medianViews)}.`,
+      });
+    }
+
+    if (analytics.recentMedianViews > 0 && analytics.medianViews > 0) {
+      const change =
+        ((analytics.recentMedianViews - analytics.medianViews) /
+          analytics.medianViews) *
+        100;
+
+      if (Math.abs(change) >= 10) {
+        cards.push({
+          title: change > 0 ? "Recent content is elevated" : "Recent content is softer",
+          description: `The latest 10 videos are ${Math.abs(change).toFixed(0)}% ${change > 0 ? "above" : "below"} the selected dataset median by views.`,
+        });
+      }
+    }
+
+    return cards.slice(0, 6);
+  }, [insights, strongestCategory, analytics]);
+
+  function exportChannelReport() {
+    if (!channel || !videos.length) return;
+
+    const report = {
+      generatedAt: new Date().toISOString(),
+      channel: {
+        id: channel.id,
+        title: channel.title,
+        subscribers: channel.subscribers,
+        totalViews: channel.views,
+        totalVideos: channel.videos,
+      },
+      filter: getFilterLabel(videoFilter),
+      analytics,
+      strongestCategory,
+      topVideos: topVideos.map((video) => ({
+        id: video.id,
+        title: video.title,
+        views: video.views,
+        likes: video.likes,
+        comments: video.comments,
+        publishedAt: video.publishedAt,
+        category: video.categoryName || "Uncategorized",
+      })),
+      insights: insightCards,
+    };
+
+    const blob = new Blob([JSON.stringify(report, null, 2)], {
+      type: "application/json",
+    });
+
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${channel.title.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "youtube-report"}-report.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
 
   const channelHistory = channel ? history[channel.id] || [] : [];
   const growth = calculateGrowth(channelHistory);
@@ -1481,6 +1624,7 @@ export default function Home() {
             <NavItem label="Home" icon="home" active={activePage === "home"} onClick={() => setActivePage("home")} />
             <NavItem label="Dashboard" icon="dashboard" active={activePage === "dashboard"} onClick={() => setActivePage("dashboard")} />
             <NavItem label="Video Analyzer" icon="video" active={activePage === "video"} onClick={() => setActivePage("video")} />
+            <NavItem label="Insights" icon="insights" active={activePage === "insights"} onClick={() => setActivePage("insights")} />
             <NavItem label="Channels" icon="channels" active={activePage === "channels"} onClick={() => setActivePage("channels")} />
             <NavItem label="Compare" icon="compare" active={activePage === "compare"} onClick={() => setActivePage("compare")} />
             <NavItem label="Settings" icon="settings" active={activePage === "settings"} onClick={() => setActivePage("settings")} />
@@ -1527,6 +1671,7 @@ export default function Home() {
             ["Home", "home"],
             ["Dashboard", "dashboard"],
             ["Video", "video"],
+            ["Insights", "insights"],
             ["Channels", "channels"],
             ["Compare", "compare"],
             ["Settings", "settings"],
@@ -1987,6 +2132,80 @@ export default function Home() {
               <div className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3"><p className="text-xs leading-5 text-white/30">Analysis uses the latest available video metadata returned by the YouTube Data API. Historical channel and video snapshots are recorded locally whenever you analyze this channel.</p></div>
             </>}
           </>}
+
+          {activePage === "insights" && <div className="space-y-6">
+            {!channel ? (
+              <EmptyPage title="Analyze a channel first" description="Insights become available after the channel analyzer has a video dataset to work with." />
+            ) : (
+              <>
+                <div className="premium-card relative overflow-hidden rounded-[28px] p-6 sm:p-8">
+                  <div className="hero-glow -right-16 -top-20 h-56 w-56 bg-red-500/15" />
+                  <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                      <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-red-400/20 bg-red-500/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-red-300">
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+                        Channel intelligence
+                      </div>
+                      <h2 className="text-3xl font-semibold tracking-[-0.04em] text-white sm:text-4xl">What the data says about {channel.title}.</h2>
+                      <p className="mt-3 max-w-2xl text-sm leading-7 text-white/40">A compact interpretation layer built from the videos you analyzed. It highlights patterns without pretending the sample is the whole channel.</p>
+                    </div>
+                    <button onClick={exportChannelReport} className="button-sheen shrink-0 rounded-xl bg-white px-4 py-2.5 text-xs font-semibold text-black transition-all duration-300 hover:-translate-y-px hover:bg-white/90">Export report</button>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <StatCard label="Strongest area" value={strongestCategory ? strongestCategory.name : "—"} description={strongestCategory ? `${formatCompact(strongestCategory.medianViews)} median views` : "Not enough data"} />
+                  <StatCard label="Recent median" value={formatCompact(analytics.recentMedianViews)} description="Latest 10 analyzed uploads" />
+                  <StatCard label="Dataset median" value={formatCompact(analytics.medianViews)} description="Selected video set" />
+                  <StatCard label="Engagement" value={`${analytics.engagementRate.toFixed(2)}%`} description="Likes + comments / views" />
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-[1.2fr_.8fr]">
+                  <div className="glass-card rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                    <SectionTitle title="Key findings" description="Signals generated from the current analyzed dataset." />
+                    {insightCards.length ? (
+                      <div className="grid gap-3 md:grid-cols-2">
+                        {insightCards.map((item) => (
+                          <div key={item.title} className="group rounded-2xl border border-white/7 bg-white/[0.025] p-4 transition-all duration-300 hover:-translate-y-1 hover:border-red-400/15 hover:bg-white/[0.045]">
+                            <div className="flex items-start gap-3">
+                              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-red-500/10 text-red-300">✦</span>
+                              <div><p className="text-sm font-semibold text-white">{item.title}</p><p className="mt-2 text-xs leading-5 text-white/40">{item.description}</p></div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <EmptyChart text="Analyze more videos to generate insights." />
+                    )}
+                  </div>
+
+                  <div className="glass-card rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                    <SectionTitle title="Strongest content areas" description="Ordered by median views in this sample." />
+                    <div className="space-y-3">
+                      {contentCategoryData.slice(0, 6).map((item, index) => (
+                        <div key={item.name} className="flex items-center gap-3">
+                          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/[0.04] text-[10px] font-semibold text-white/45">{index + 1}</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-3"><p className="truncate text-xs font-medium text-white">{item.name}</p><span className="text-[10px] text-white/30">{formatCompact(item.medianViews)}</span></div>
+                            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/5"><div className="h-full rounded-full bg-red-500" style={{ width: `${Math.max(6, Math.min(100, (item.medianViews / Math.max(contentCategoryData[0]?.medianViews || 1, 1)) * 100))}%` }} /></div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="glass-card rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                  <SectionTitle title="Opportunity signals" description="Simple signals that point to content worth investigating further." />
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <div className="rounded-2xl border border-white/7 bg-white/[0.025] p-4"><p className="text-[10px] uppercase tracking-[0.15em] text-white/20">Recent momentum</p><p className="mt-3 text-xl font-semibold text-white">{analytics.recentMedianViews > analytics.medianViews ? "Above median" : analytics.recentMedianViews < analytics.medianViews ? "Below median" : "Around median"}</p><p className="mt-1 text-xs text-white/35">Compared with the full selected dataset median.</p></div>
+                    <div className="rounded-2xl border border-white/7 bg-white/[0.025] p-4"><p className="text-[10px] uppercase tracking-[0.15em] text-white/20">Best format</p><p className="mt-3 text-xl font-semibold text-white">{(() => { const shortStats = calculateAnalytics(filteredVideos.filter((v) => getVideoType(v) === "shorts")); const longStats = calculateAnalytics(filteredVideos.filter((v) => getVideoType(v) === "long")); if (!shortStats.medianViews && !longStats.medianViews) return "—"; return shortStats.medianViews > longStats.medianViews ? "Shorts" : "Long-form"; })()}</p><p className="mt-1 text-xs text-white/35">Based on median views in this sample.</p></div>
+                    <div className="rounded-2xl border border-white/7 bg-white/[0.025] p-4"><p className="text-[10px] uppercase tracking-[0.15em] text-white/20">Upload rhythm</p><p className="mt-3 text-xl font-semibold text-white">{analytics.uploadsPerWeek.toFixed(1)} / week</p><p className="mt-1 text-xs text-white/35">Most common day: {analytics.mostCommonUploadDay}.</p></div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>}
 
           {activePage === "channels" && <div>{savedChannels.length === 0 ? <EmptyPage title="No saved channels" description="Analyze a channel from the dashboard and save it here for quick access and comparisons." /> : <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{savedChannels.map((saved) => <div key={saved.id} className="glass-card rounded-2xl border border-white/10 bg-white/[0.03] p-5"><div className="flex items-center gap-3">{saved.thumbnail ? <img src={saved.thumbnail} alt="" className="h-12 w-12 rounded-full object-cover" /> : <div className="h-12 w-12 rounded-full bg-white/10" />}<div className="min-w-0"><p className="truncate text-sm font-semibold text-white">{saved.title}</p><p className="mt-1 text-[10px] text-white/30">{saved.id}</p></div></div><div className="mt-5 flex gap-2"><button onClick={() => { setUrl(`https://youtube.com/channel/${saved.id}`); analyzeChannel(saved.id); }} className="button-sheen flex-1 rounded-xl bg-white px-3 py-2 text-xs font-medium text-black transition-all duration-300 hover:-translate-y-px hover:bg-white/90">Analyze</button><button onClick={() => removeSavedChannel(saved.id)} className="rounded-xl border border-white/10 px-3 py-2 text-xs text-white/50 hover:bg-white/5 hover:text-white">Remove</button></div></div>)}</div>}</div>}
 
